@@ -20,11 +20,6 @@ jobs:
           num=${branch_name#*#}
           issue_num=`echo $num | egrep -o '^[^/]+'`
           echo "ISSUE_NUM=$issue_num" >> $GITHUB_ENV   
-        
-#           branch_name=`echo '${{ github.event.pull_request.head.ref }}'`
-#           num=`echo $branch_name | egrep -o '^[^/]+'`
-#           issue_num=${num#*#}
-#           echo "ISSUE_NUM=$issue_num" >> $GITHUB_ENV   
 
       - name: Get Issue ${{ env.ISSUE_NUM }} Project Item ID
         run: |
