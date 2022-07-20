@@ -1,0 +1,5 @@
+name: New Issue Created
+
+on:
+  issues:
+    types: [opened]
