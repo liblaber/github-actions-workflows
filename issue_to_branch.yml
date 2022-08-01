@@ -11,16 +11,42 @@ env:
     COLUMN_NAME: a-project-column-name ## The name of the project column you want to move the issue to
     
 jobs:
-  Add-Linked-Issue-To-Project:
+  Check-Branch-Name:
     runs-on: ubuntu-latest
+    outputs:
+      issue_num: ${{ steps.step1.outputs.issue_num }}
+      tracked: ${{ steps.step1.outputs.tracked }}
     steps:
       - name: Get Created Issue Number
+        id: step1
         run: |
           branch_name=`echo '${{ github.event.ref }}'`
           num=${branch_name#*#}
           issue_num=`echo $num | egrep -o '^[^/]+'`
-          echo "ISSUE_NUM=$issue_num" >> $GITHUB_ENV   
-
+          re='^[0-9]+$'
+          if ! [[ $issue_num =~ $re ]] ; then
+            echo "::set-output name=tracked::false"
+          else
+            echo "::set-output name=tracked::true"
+          fi
+          echo "::set-output name=issue_num::$issue_num"
+          
+  Branch-Is-Not-Tracked:
+    needs: Check-Branch-Name
+    if: needs.Check-Branch-Name.outputs.tracked == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Branch Is not Tracked
+        run: |
+          echo "No issue number detected. Branch ${{ github.event.ref }} will not be tracked in projects.";
+          
+  Add-Linked-Issue-To-Project:
+    needs: Check-Branch-Name
+    if: needs.Check-Branch-Name.outputs.tracked == 'true'
+    env: 
+      ISSUE_NUM: ${{ needs.Check-Branch-Name.outputs.issue_num}}
+    runs-on: ubuntu-latest
+    steps:     
       - name: Get Issue ${{ env.ISSUE_NUM }} Project Item ID
         run: |
           gh api graphql -f query='query FindIssueID {
@@ -39,8 +65,7 @@ jobs:
                   echo 'ISSUE_ID='$(jq '.data.repository.issue.id' project_data.json) >> $GITHUB_ENV
                   echo 'ISSUE_PROJECT_ID='$(jq '.data.repository.issue.projectItems.nodes[0].id' project_data.json) >> $GITHUB_ENV
                   echo 'ISSUE_STATE='$(jq '.data.repository.issue.state' project_data.json) >> $GITHUB_ENV
-                  
-       
+                      
       - name: Get Project Status Item ID
         run: |
           gh api graphql -f query='query{
