@@ -11,37 +11,88 @@ env:
     REPO: name-of-repository ## The name of the repository your issues, branches and project are on
     
 jobs:
-  Move-Issue-In-Project:
+  Check-Branch-Name:
+    runs-on: ubuntu-latest
+    outputs:
+      issue_num: ${{ steps.step1.outputs.issue_num }}
+      tracked: ${{ steps.step1.outputs.tracked }}
+    steps:
+      - name: Get Created Issue Number
+        id: step1
+        run: |
+          branch_name=`echo '${{ github.event.pull_request.head.ref }}'`
+          issue_num=`echo ${branch_name#*#} | egrep -o '^[^/]+'`
+          re='^[0-9]+$'
+          if ! [[ $issue_num =~ $re ]] ; then
+            echo "::set-output name=tracked::false"
+          else
+            echo "::set-output name=tracked::true"
+          fi
+          echo "::set-output name=issue_num::$issue_num"
+          
+  Branch-Is-Not-Tracked:
+    needs: Check-Branch-Name
+    if: needs.Check-Branch-Name.outputs.tracked == 'false'
     runs-on: ubuntu-latest
     steps:
+      - name: Branch Is not Tracked
+        run: |
+          echo "No issue number detected. Branch ${{ github.event.ref }} will not be tracked in projects.";
+
+  Move-Issue-In-Project:
+    runs-on: ubuntu-latest
+    needs: Check-Branch-Name
+    if: needs.Check-Branch-Name.outputs.tracked == 'true'
+    env: 
+      ISSUE_NUM: ${{ needs.Check-Branch-Name.outputs.issue_num}}
+    steps:     
+      - name: Get Issue Number
+        run: |
+          action=`echo '${{github.event.action}}'`
+          merged=`echo '${{github.event.pull_request.merged}}'` 
+          echo "PR_ACTION=$action" >> $GITHUB_ENV
+          echo "MERGED=$merged" >> $GITHUB_ENV   
+      
+      - name: Get all Branches for Issue
+        id: branches
+        run: |
+          gh api graphql -f query='query FindBranches{
+            repository(owner:"${{ env.ORGANIZATION }}", name:"${{ env.REPO }}") {
+              refs(refPrefix: "refs/heads/#${{env.ISSUE_NUM}}/"  first: 100){
+                totalCount
+                nodes {
+                  associatedPullRequests(states: [OPEN],first:100) {
+                    totalCount
+                  }
+                }
+              }
+            }
+          }' > project_data.json
+            echo 'NUM_OF_BRANCHES='$(jq '.data.repository.refs.totalCount' project_data.json) >> $GITHUB_ENV
+            echo 'NUM_OF_PRS='$(jq '[.data.repository.refs.nodes | .[].associatedPullRequests.totalCount] | add' project_data.json) >> $GITHUB_ENV
+      
+
       - name: Set Env Variables For New/Reopened PR
-        if: github.event.action == 'opened' || github.event.action == 'reopened'
+        if: ${{env.PR_ACTION == 'opened' || env.PR_ACTION == 'reopened' || env.PR_ACTION == 'edited'}}
         run: |
           echo "ISSUE_PROJECT_STATUS="In Review"" >> $GITHUB_ENV  
           
       - name: Set Env Variables For Closed PR
-        if: (!github.event.pull_request.merged) && (github.event.action == 'closed')
+        if: ${{ (env.PR_ACTION == 'closed') && ( env.NUM_OF_PRS >= 1) }}
+        run: |
+          echo "ISSUE_PROJECT_STATUS="In Review"" >> $GITHUB_ENV    
+    
+      - name: Set Env Variables For Closed PR No More PRS
+        if: ${{ (env.MERGED== 'false') && (env.PR_ACTION == 'closed') && ( env.NUM_OF_PRS < 1) }}
         run: |
           echo "ISSUE_PROJECT_STATUS="In Progress"" >> $GITHUB_ENV    
 
       - name: Set Env Variables For Closed and Merged PR
-        if: (github.event.pull_request.merged) && (github.event.action == 'closed')
+        if: ${{(env.MERGED == 'true') && (env.PR_ACTION == 'closed') && ( env.NUM_OF_BRANCHES == 0)}}
         run: |
           echo "ISSUE_PROJECT_STATUS="Done"" >> $GITHUB_ENV    
           
-      - name: Get Created Issue Number
-        run: |
-          branch_name=`echo '${{ github.event.pull_request.head.ref }}'`
-          num=${branch_name#*#}
-          issue_num=`echo $num | egrep -o '^[^/]+'`
-          echo "ISSUE_NUM=$issue_num" >> $GITHUB_ENV   
-        
-#           branch_name=`echo '${{ github.event.pull_request.head.ref }}'`
-#           num=`echo $branch_name | egrep -o '^[^/]+'`
-#           issue_num=${num#*#}
-#           echo "ISSUE_NUM=$issue_num" >> $GITHUB_ENV   
-          
-      - name: Get Issue Project Item ID
+      - name: Get Issue Project Item ID 
         run: |
           gh api graphql -f query='query FindIssueID {
             repository(owner:"${{ env.ORGANIZATION }}", name:"${{ env.REPO }}") {
@@ -59,6 +110,7 @@ jobs:
                   string=$(jq '.data.repository.issue.projectItems.nodes[0].id' project_data.json)
                   string=`echo "$string" | tr -d '"'`
                   echo 'ISSUE_PROJECT_ID='$string >> $GITHUB_ENV
+              
        
       - name: Get Project Status Item ID
         run: |
@@ -106,7 +158,7 @@ jobs:
             }'
             
       - name: Close Issue
-        if: (github.event.action == 'closed') && (github.event.pull_request.merged)
+        if: ${{(env.NUM_OF_BRANCHES == 0) && (env.MERGED == 'true') && (env.PR_ACTION == 'closed')}}
         run: |
          gh api graphql -f query='
             mutation {
@@ -117,4 +169,3 @@ jobs:
                     }
                   }
                 }'
-      
