@@ -12,36 +12,14 @@ env:
     COLUMN_NAME: a-project-column-name ## The name of the project column you want to move the issue to
     
 jobs:
-  Move New Issue to Todo Column:
+  Add-Linked-Issue-To-Project:
     runs-on: ubuntu-latest
     steps:
       - name: Get Created Issue Number
         run: |
-          branch_name=`echo '${{ github.event.ref }}'`
-          num=${branch_name#*#}
-          issue_num=`echo $num | egrep -o '^[^/]+'`
-          echo "ISSUE_NUM=$issue_num" >> $GITHUB_ENV   
+          echo "ISSUE_NUM=${{ github.event.issue.number }}" >> $GITHUB_ENV
+          echo "ISSUE_ID=${{ github.event.issue.node_id }}" >> $GITHUB_ENV
           
-      - name: Get Issue ${{ env.ISSUE_NUM }} Project Item ID
-        run: |
-          gh api graphql -f query='query FindIssueID {
-            repository(owner:"${{ env.ORGANIZATION }}", name:"${{ env.REPO }}") {
-                issue(number:${{ env.ISSUE_NUM }}) {
-                      id,
-                      state,
-                      projectItems(first: 1){
-                        nodes{ 
-                          id
-                          }
-                        },
-                      }
-                    }
-                  }' > project_data.json
-                  echo 'ISSUE_ID='$(jq '.data.repository.issue.id' project_data.json) >> $GITHUB_ENV
-                  echo 'ISSUE_PROJECT_ID='$(jq '.data.repository.issue.projectItems.nodes[0].id' project_data.json) >> $GITHUB_ENV
-                  echo 'ISSUE_STATE='$(jq '.data.repository.issue.state' project_data.json) >> $GITHUB_ENV
-                  
-       
       - name: Get Project Status Item ID
         run: |
           gh api graphql -f query='query{
@@ -65,19 +43,32 @@ jobs:
             }' > project_data.json
           echo 'PROJECT_ID='$(jq '.data.organization.projectV2.id' project_data.json) >> $GITHUB_ENV
           echo 'STATUS_FIELD_ID='$(jq '.data.organization.projectV2.fields.nodes[] | select(.name== "Status") | .id' project_data.json) >> $GITHUB_ENV
-          echo 'COLUMN_OPTION_ID='$(jq '.data.organization.projectV2.fields.nodes[] | select(.name== "Status") | .options[] | select(.name=="${{ env.COLUMN_NAME }}") |.id' project_data.json) >> $GITHUB_ENV
-          
-      - name: Move Issue Number ${{ env.ISSUE_NUM }} Into ${{ env.COLUMN_NAME }}
+          echo 'TODO_OPTION_ID='$(jq '.data.organization.projectV2.fields.nodes[] | select(.name== "Status") | .options[] | select(.name=="${{ env.COLUMN_NAME }}") |.id' project_data.json) >> $GITHUB_ENV
+            
+      - name: Add Issue to Project(beta)
+        run: |
+          item_id="$( gh api graphql -f query='
+            mutation($project:ID!, $pr:ID!) {
+              addProjectV2ItemById(input: {projectId: $project, contentId: $pr}) {
+                item {
+                  id
+                }
+              }
+            }' -f project=${{ env.PROJECT_ID}} -f pr=${{ env.ISSUE_ID}} --jq '.data.addProjectV2ItemById.item.id')"
+
+            echo 'ITEM_ID='$item_id >> $GITHUB_ENV
+            
+      - name: Move Issue Number ${{ env.ISSUE_NUM }} Into Todo
         run: |
           gh api graphql -f query='
             mutation {
               updateProjectV2ItemFieldValue(
                 input: {
                       projectId: ${{ env.PROJECT_ID }}
-                      itemId: ${{ env.ISSUE_PROJECT_ID }}
+                      itemId: "${{ env.ITEM_ID }}"
                       fieldId: ${{ env.STATUS_FIELD_ID }}
                       value: { 
-                          singleSelectOptionId: ${{ env.COLUMN_OPTION_ID }}
+                          singleSelectOptionId: ${{ env.TODO_OPTION_ID }}
                       }
                 }
                 ) {
@@ -87,3 +78,4 @@ jobs:
               }
             }'
             
+      
