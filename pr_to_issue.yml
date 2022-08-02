@@ -37,7 +37,7 @@ jobs:
     steps:
       - name: Branch Is not Tracked
         run: |
-          echo "No issue number detected. Branch ${{ github.event.ref }} will not be tracked in projects.";
+          echo "No issue number detected. Branch ${{ github.event.pull_request.head.ref }} will not be tracked in projects.";
 
   Move-Issue-In-Project:
     runs-on: ubuntu-latest
